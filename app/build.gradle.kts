@@ -33,6 +33,7 @@ android {
         resources.excludes.add("META-INF/NOTICE.txt")
         resources.excludes.add("META-INF/LICENSE.md")
         resources.excludes.add("META-INF/NOTICE.md")
+        resources.excludes.add("META-INF/NOTICE.markdown")
     }
 }
 dependencies {
