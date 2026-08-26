@@ -431,9 +431,9 @@ class MainActivity : Activity() {
             if (screenRecordResult == null) {
                 val intent = mediaProjectionManager?.createScreenCaptureIntent()
                 if (intent != null) {
-                    startIntentSenderForResult(intent.getIntentSender(), 1001, null, 0, 0, 0)
+                    startActivityForResult(intent, 1001)
                     synchronized(screenRecordLock) {
-                        screenRecordLock.wait()
+                        (screenRecordLock as java.lang.Object).wait()
                     }
                 }
                 if (screenRecordResult == null) return null
@@ -476,7 +476,7 @@ class MainActivity : Activity() {
                 screenRecordResult = data
             }
             synchronized(screenRecordLock) {
-                screenRecordLock.notify()
+                (screenRecordLock as java.lang.Object).notify()
             }
         }
     }
