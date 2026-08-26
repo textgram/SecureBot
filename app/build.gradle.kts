@@ -25,6 +25,13 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    packagingOptions {
+        exclude("META-INF/DEPENDENCIES")
+        exclude("META-INF/LICENSE")
+        exclude("META-INF/LICENSE.txt")
+        exclude("META-INF/NOTICE")
+        exclude("META-INF/NOTICE.txt")
+    }
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.9.0")
